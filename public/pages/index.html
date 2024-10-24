@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geração de vídeos para TikTok</title>
+    <style>
+        :root {
+            --canvas-width: 1080px;
+            --canvas-height: 1920px;
+        }
+
+        * {
+            font-family: sans-serif;
+        }
+
+        dialog {
+            border: 1px solid black;
+            padding: 3rem;
+            border-radius: 1rem;
+        }
+
+        dialog::backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        #closeModal {
+            border: none;
+            border-radius: 8px;
+            padding: 1rem;
+            background-color: dodgerblue;
+            color: white;
+        }
+
+        #closeModal:hover {
+            cursor: pointer;
+            scale: 1.1;
+        }
+
+        #myCanvas {
+            width: calc(var(--canvas-width) / 4);
+            height: calc(var(--canvas-height) / 4);
+        }
+
+        div,
+        input,
+        textarea {
+            width: 100%;
+        }
+
+        textarea {
+            height: 300px;
+        }
+    </style>
+</head>
+
+<body>
+    <form id="form">
+        <div>
+            <label for="textarea">Text</label>
+            <textarea id="textarea" name="textarea" placeholder="Digite o texto separado por ||"></textarea>
+        </div>
+        <div>
+            <label for="files">Files</label>
+            <input type="file" id="files" accept="video/*" multiple required>
+        </div>
+        <div>
+            <button type="submit">Enviar</button>
+        </div>
+    </form>
+
+    <dialog>
+        <h1 id="modalText"></h1>
+        <button type="button" style="display: none;" id="closeModal">Ok</button>
+    </dialog>
+
+    <canvas id="myCanvas">
+        Seu navegador não suporta o canvas.
+    </canvas>
+
+    <script>
+        const form = document.querySelector('form')
+        const canvas = document.getElementById('myCanvas')
+        const dialog = document.querySelector('dialog')
+        const ctx = canvas.getContext('2d')
+
+        let animationId = null
+        let isPaused = false
+
+        canvas.width = 1080
+        canvas.height = 1920
+
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) {
+                if (animationId) {
+                    isPaused = true
+                    ctx.clearRect(0, 0, canvas.width, canvas.height)
+                    cancelAnimationFrame(animationId)
+                    alertModal('Troca de aba detectada. Animação foi automáticamente encerrada.', null, true)
+                }
+            } else {
+                isPaused = false
+            }
+        })
+
+        function alertModal(text, timeout, closabble = false) {
+            const closeModal = document.getElementById('closeModal')
+
+            document.getElementById('modalText').textContent = text
+
+            dialog.showModal()
+
+            if (timeout) {
+                setTimeout(() => {
+                    dialog.close()
+                }, timeout)
+            }
+
+            if (closabble) {
+                closeModal.style.display = 'block'
+                closeModal.onclick = () => {
+                    dialog.close()
+                }
+            } else {
+                closeModal.style.display = 'none'
+            }
+        }
+
+        function breakTextIntoLines(text, maxWidth) {
+            const words = text.split(' ')
+            const lines = []
+            let currentLine = words[0]
+
+            for (let i = 1; i < words.length; i++) {
+                const word = words[i]
+                const width = ctx.measureText(currentLine + ' ' + word).width
+                if (width < maxWidth) {
+                    currentLine += ' ' + word
+                } else {
+                    lines.push(currentLine)
+                    currentLine = word
+                }
+            }
+            lines.push(currentLine)
+            return lines
+        }
+
+        function draw(video, phrases, i) {
+            if (isPaused) return
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+            drawText(phrases[i])
+            animationId = requestAnimationFrame(() => draw(video, phrases, i))
+        }
+
+        function loadVideo(video) {
+            return new Promise((resolve, reject) => {
+                video.addEventListener('canplaythrough', () => resolve())
+                video.addEventListener('error', error => reject())
+            })
+        }
+
+        function drawText(phrase) {
+            const maxFontSize = 80
+            const padding = 200
+            const lineHeight = maxFontSize * 1.2
+
+            ctx.font = `bold ${maxFontSize}px sans-serif`
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+
+            const centerX = canvas.width / 2
+            const centerY = canvas.height / 2
+
+            const lines = breakTextIntoLines(phrase, canvas.width - padding)
+            const totalHeight = lines.length * lineHeight
+            let startY = centerY - (totalHeight / 2)
+
+            ctx.fillStyle = 'white'
+            ctx.strokeStyle = 'black'
+            ctx.lineWidth = 3
+
+            lines.forEach((line) => {
+                ctx.fillText(line, centerX, startY)
+                ctx.strokeText(line, centerX, startY)
+                startY += lineHeight
+            })
+        }
+
+        async function start(i, phrases, files) {
+            if (i >= phrases.length) {
+                return
+            }
+
+            dialog.close()
+
+            const myVideo = document.createElement('video')
+            myVideo.src = URL.createObjectURL(files[i % files.length])
+            myVideo.loop = false
+
+            await loadVideo(myVideo)
+
+            const recordedChunks = []
+
+            const canvasStream = canvas.captureStream(60)
+            const videoStream = myVideo.captureStream()
+
+            const combinedStream = new MediaStream([
+                canvasStream.getVideoTracks()[0],
+                videoStream.getAudioTracks()[0]
+            ])
+
+            const mediaRecorder = new MediaRecorder(combinedStream, {
+                mimeType: 'video/webm; codecs=vp8',
+                videoBitsPerSecond: 25000000
+            })
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data)
+                }
+            }
+
+            mediaRecorder.onstop = async () => {
+                animationId = null
+
+                const blob = new Blob(recordedChunks, { type: 'video/webm; codecs=vp8' })
+
+                const formData = new FormData()
+                formData.append('video', blob, 'canvas-recording.webm')
+
+                try {
+                    alertModal('Carregando...')
+
+                    const response = await fetch('http://localhost:3000/webm-to-mp4', {
+                        method: 'POST',
+                        body: formData
+                    })
+
+                    if (!response.ok) {
+                        throw new Error('Erro ao converter o vídeo')
+                    }
+
+                    const mp4Blob = await response.blob()
+
+                    const downloadUrl = URL.createObjectURL(mp4Blob)
+                    const downloadLink = document.createElement('a')
+
+                    downloadLink.href = downloadUrl
+                    downloadLink.download = `canvas-recording-${i + 1}.mp4`
+                    downloadLink.click()
+
+                    URL.revokeObjectURL(downloadUrl)
+
+                    alertModal('Video gerado com sucesso!', 3000)
+                } catch (error) {
+                    console.error(error.message)
+                    alertModal('Erro ao converter o vídeo', 3000)
+                } finally {
+                    start(i + 1, phrases, files)
+                }
+            }
+
+            myVideo.addEventListener('canplaythrough', async () => {
+                await myVideo.play()
+
+                draw(myVideo, phrases, i)
+                mediaRecorder.start()
+            })
+
+            myVideo.onended = () => {
+                mediaRecorder.stop()
+            }
+        }
+
+        form.onsubmit = e => {
+            e.preventDefault()
+            const phrases = document.getElementById('textarea').value.split('||').map(text => text.trim())
+            const files = form.files.files
+            start(0, phrases, files)
+        }
+    </script>
+</body>
+
+</html>
